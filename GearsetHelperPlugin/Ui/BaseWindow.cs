@@ -22,6 +22,8 @@ using Lumina.Excel.GeneratedSheets;
 
 using GearsetHelperPlugin.Models;
 using GearsetHelperPlugin.Sheets;
+using Newtonsoft.Json;
+using System.IO;
 
 namespace GearsetHelperPlugin.Ui;
 
@@ -69,6 +71,8 @@ internal abstract class BaseWindow : IDisposable {
 
 	private bool visible = false;
 	private bool oldVisible = false;
+
+	private string newLoadoutName = "Pick a loadout name";
 
 	protected bool Visible {
 		get => visible;
@@ -317,7 +321,7 @@ internal abstract class BaseWindow : IDisposable {
 				ImGui.SetKeyboardFocusHere();
 
 			float lineHeight = 20 * ImGui.GetIO().FontGlobalScale;
-			WidestFood = Math.Max(WidestFood, ImGui.GetWindowContentRegionWidth());
+			WidestFood = Math.Max(WidestFood, ImGui.GetWindowContentRegionMax().X);
 
 			ImGui.BeginChild($"###{label}#FoodDisplay", new Vector2(WidestFood, lineHeight * 10), true);
 			if (!focused) {
@@ -328,7 +332,7 @@ internal abstract class BaseWindow : IDisposable {
 			float scroll = ImGui.GetScrollY();
 			float padX = ImGui.GetStyle().FramePadding.X;
 
-			Vector2 size = new(ImGui.GetWindowContentRegionWidth(), 2 * lineHeight);
+			Vector2 size = new(ImGui.GetWindowContentRegionMax().X, 2 * lineHeight);
 
 			// Filter stuff
 			filtered = FilterFood(choices, filter, filtered);
@@ -626,7 +630,6 @@ internal abstract class BaseWindow : IDisposable {
 			if (ImGui.CollapsingHeader(Localization.Localize("gui.calculated", "Calculated"), ImGuiTreeNodeFlags.DefaultOpen)) {
 				DrawCalculatedTable(CachedSet.Calculated);
 			}
-
 			if (CachedSet.MateriaCount.Count > 0 || CachedSet.EmptyMeldSlots > 0) {
 				if (ImGui.CollapsingHeader(Localization.Localize("gui.melded", "Melded Materia"), ImGuiTreeNodeFlags.DefaultOpen)) {
 					ImGui.BeginTable("MateriaTable", 2, ImGuiTableFlags.Resizable | ImGuiTableFlags.RowBg | ImGuiTableFlags.Sortable);
@@ -705,6 +708,154 @@ internal abstract class BaseWindow : IDisposable {
 					ImGui.EndTable();
 				}
 			}
+			
+
+			if (ImGui.CollapsingHeader(Localization.Localize("gui.loadouts", "Loadouts"), ImGuiTreeNodeFlags.DefaultOpen)) {
+
+				ImGui.InputText("", ref newLoadoutName, 64);
+				ImGui.SameLine();
+
+				//Creates the Loadouts folder in the FFXIV game directory, couldn't figure out how to dynamically direct it to a plugin folder location.
+				string directoryPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"Loadouts\");
+					
+				string filePath = Path.Combine(directoryPath, newLoadoutName + ".json");
+
+				if (ImGui.Button("Add##add_loadout_"))//Creates a button Add. The string after ## is just a description for the developer.
+				{	
+
+					string equipmentSetJson = JsonConvert.SerializeObject(CachedSet);
+
+					//Creates the "Loadouts" directory/folder inside the project files if it doesn't exist already.
+					if(!Directory.Exists(directoryPath)) {
+						Directory.CreateDirectory(directoryPath);
+					}
+					
+					File.WriteAllText(filePath, equipmentSetJson);
+				}
+				
+				ImGui.NewLine();
+
+				string[] jsonList = Directory.GetFiles(directoryPath);
+
+				/* 
+				* Goes through the list of JSON loadouts and draws out the UI similar to the Items section. No stat windows for items because I can't figure out how
+				* to properly deserialize the EquipmentSet Params attribute.
+				*/
+				foreach (string jsonLoadout in jsonList) {
+					if (ImGui.CollapsingHeader(Localization.Localize("gui.Loadout", Path.GetFileNameWithoutExtension(jsonLoadout)))) {
+						bool first = true;
+
+						EquipmentSet? loadoutSet = JsonConvert.DeserializeObject<EquipmentSet>(File.ReadAllText(jsonLoadout));
+
+						for (int i = 0; i < loadoutSet.Items.Count; i++) {
+							MeldedItem rawItem = loadoutSet.Items[i];
+							Dictionary<uint, StatData> stats = loadoutSet.ItemAttributes[i];
+							ExtendedItem? item = rawItem.Row();
+							if (item is null)
+								continue;
+
+							if (first)
+								first = false;
+							else {
+								ImGui.Spacing();
+								ImGui.Separator();
+								ImGui.Spacing();
+							}
+
+							TextureWrap? icon = GetIcon(item, rawItem.HighQuality);
+							int height = icon is null ? 0 : Math.Min(icon.Height, (int) (32 * scale));
+							if (icon != null) {
+								ImGui.Image(icon.ImGuiHandle, new Vector2(height, height));
+								ImGui.SameLine();
+								ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (height - ImGui.GetFontSize()) / 2);
+							}
+
+							ImGui.Text(rawItem.HighQuality ? $"{item.Name} {(char) SeIconChar.HighQuality}" : item.Name);
+
+							if (CachedSet.ILvlSync > 0 && item.LevelItem.Row > CachedSet.ILvlSync) {
+								ImGui.SameLine();
+								ImGui.TextColored(ImGuiColors.ParsedGrey, $"(At i{CachedSet.ILvlSync})");
+							}
+
+							ImGui.SameLine(ImGui.GetWindowContentRegionMax().X - 30);
+
+							//Create the little link icon/button.
+							ImGui.PushID($"item#link#{rawItem.ID}");
+							if (ImGuiComponents.IconButton(FontAwesomeIcon.Link))
+								Ui.Plugin.ChatGui.LinkItem(item, rawItem.HighQuality);
+							ImGui.PopID();
+
+							ImGui.NewLine();
+
+							int materiaListCounter = 2;
+
+							if (rawItem.HighQuality) {
+								materiaListCounter = 5;
+							}
+
+							for (int j = 0; j < materiaListCounter; j++) {
+
+								ushort materiaIconID = Data.MateriaSheet.GetRow(rawItem.Melds[j].ID).Item[rawItem.Melds[j].Grade].Value.Icon;
+
+
+								ExtendedItem? extendMateriaItem = Data.ItemSheet.GetRow(rawItem.Melds[j].ID);
+								TextureWrap? materiaIcon = GetIcon(materiaIconID);
+
+								int materiaHeight = materiaIcon == null ? 0 : Math.Min(materiaIcon.Height, (int) (32 * scale));
+								
+								if (materiaIcon != null) {
+									ImGui.Image(materiaIcon.ImGuiHandle, new Vector2(materiaHeight, materiaHeight));
+									ImGui.SameLine();
+									ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (materiaHeight - ImGui.GetFontSize()) / 2);
+								}
+
+								if (extendMateriaItem.Equals(null))
+									ImGui.TextColored(ImGuiColors.ParsedGrey, Localization.Localize("gui.error-slots", "(Error Slots)"));
+								else {
+									if (extendMateriaItem.ToString().Equals("Item#0"))
+										ImGui.TextColored(ImGuiColors.ParsedGrey, Localization.Localize("gui.empty-slots", "(Empty Slots)"));
+									else {
+
+										string materiaDisplayName = Data.MateriaSheet.GetRow(rawItem.Melds[j].ID).Item[rawItem.Melds[j].Grade].Value.Name;
+
+										ImGui.Text(materiaDisplayName);
+
+										ImGui.SameLine(ImGui.GetColumnWidth() - 30);
+
+									}
+									ImGui.NewLine();
+								}
+
+							}
+
+							ImGui.NewLine();
+							
+							//Draws the gear items stat window, by pulling int the DrawStatTable method/function.
+							if (stats is not null && stats.Count > 0)
+								DrawStatTable(stats.Values, loadoutSet.Params, false, true);
+						}
+
+						if (ImGui.Button("Delete Loadaout##remove_loadout_"))//Creates a button to delete. The string after ## is just a description for the developer.
+						{
+							File.Delete(jsonLoadout);
+						}
+					}
+
+					ImGui.NewLine();
+
+					
+
+					ImGui.NewLine();
+
+
+				}
+
+
+
+			}
+
+
+
 
 			if (ImGui.CollapsingHeader(Localization.Localize("gui.items", "Items"))) {
 				bool first = true;
@@ -739,13 +890,65 @@ internal abstract class BaseWindow : IDisposable {
 						ImGui.TextColored(ImGuiColors.ParsedGrey, $"(At i{CachedSet.ILvlSync})");
 					}
 
-					ImGui.SameLine(ImGui.GetWindowContentRegionWidth() - 30);
+					ImGui.SameLine(ImGui.GetWindowContentRegionMax().X - 30);
 
+					//Create the little link icon/button.
 					ImGui.PushID($"item#link#{rawItem.ID}");
 					if (ImGuiComponents.IconButton(FontAwesomeIcon.Link))
 						Ui.Plugin.ChatGui.LinkItem(item, rawItem.HighQuality);
 					ImGui.PopID();
 
+					//Draws out the materia on the item.
+
+					ImGui.NewLine();
+
+					int materiaListCounter = 2;
+
+					if (rawItem.HighQuality) {
+						materiaListCounter = 5;
+					}
+
+					//Iterates through the matreia list for the current item and draws each one below the item icon.
+					for (int j = 0; j < materiaListCounter; j++) {
+
+						
+
+
+						ushort materiaIconID = Data.MateriaSheet.GetRow(rawItem.Melds[j].ID).Item[rawItem.Melds[j].Grade].Value.Icon;
+
+
+						ExtendedItem? extendMateriaItem = Data.ItemSheet.GetRow(rawItem.Melds[j].ID);
+						TextureWrap? materiaIcon = GetIcon(materiaIconID);
+
+						int materiaHeight = materiaIcon == null ? 0 : Math.Min(materiaIcon.Height, (int) (32 * scale));
+						
+						if (materiaIcon != null) {
+							ImGui.Image(materiaIcon.ImGuiHandle, new Vector2(materiaHeight, materiaHeight));
+							ImGui.SameLine();
+							ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (materiaHeight - ImGui.GetFontSize()) / 2);
+						}
+
+						if (extendMateriaItem.Equals(null))
+							ImGui.TextColored(ImGuiColors.ParsedGrey, Localization.Localize("gui.error-slots", "(Error Slots)"));
+						else {
+							if (extendMateriaItem.ToString().Equals("Item#0"))
+								ImGui.TextColored(ImGuiColors.ParsedGrey, Localization.Localize("gui.empty-slots", "(Empty Slots)"));
+							else {
+
+								string materiaDisplayName = Data.MateriaSheet.GetRow(rawItem.Melds[j].ID).Item[rawItem.Melds[j].Grade].Value.Name;
+
+								ImGui.Text(materiaDisplayName);
+
+								ImGui.SameLine(ImGui.GetColumnWidth() - 30);
+
+							}
+							ImGui.NewLine();
+						}
+												
+					}
+
+					ImGui.NewLine();
+					//Draws the gear items stat window, by pulling int the DrawStatTable method/function.
 					if (stats is not null && stats.Count > 0)
 						DrawStatTable(stats.Values, CachedSet.Params, false, true);
 				}
