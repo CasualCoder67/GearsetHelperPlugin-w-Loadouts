@@ -11,6 +11,8 @@ using Lumina.Excel;
 using Lumina.Excel.GeneratedSheets;
 using GearsetHelperPlugin.Sheets;
 
+using Newtonsoft.Json;
+
 namespace GearsetHelperPlugin.Models;
 
 internal class EquipmentSet {
@@ -83,8 +85,9 @@ internal class EquipmentSet {
 	#endregion
 
 	#region Attributes
-
+	[JsonIgnore]
 	public Dictionary<uint, ExtendedBaseParam> Params { get; } = new();
+
 	public Dictionary<uint, StatData> Attributes { get; } = new();
 	public List<Dictionary<uint, StatData>> ItemAttributes { get; } = new();
 
